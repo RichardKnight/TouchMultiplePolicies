@@ -1,0 +1,202 @@
+'================================================================================
+'
+' This macro is designed to be used by the IT Service Desk. It takes an Excel
+'	file containing a list of policy numbers in column A as input. It reads
+'	through the list and writes information for any policy it failed to
+'	touch to a text file.
+'
+'================================================================================
+
+Global g_HostSettleTime%
+Global g_szPassword$
+
+'*** Mainline Logic
+Sub Main()
+
+'*** Get the main system object
+	Dim Sessions As Object
+	Dim System As Object
+	Set System = CreateObject("BlueZone.System")
+		
+	If (System is Nothing) Then
+		Msgbox "Could not create the BlueZone System object.  Stopping macro playback."
+		STOP
+	End If
+
+	Set Sessions = System.Sessions
+	If (Sessions is Nothing) Then
+		Msgbox "Could not create the Sessions collection object.  Stopping macro playback."
+		STOP
+	End If
+'***
+
+'*** Set the default wait timeout value  (Time between actions)
+	g_HostSettleTime = 50	' milliseconds
+
+	OldSystemTimeout& = System.TimeoutValue
+	If (g_HostSettleTime > OldSystemTimeout) Then
+		System.TimeoutValue = g_HostSettleTime
+	End If
+'***
+
+'*** Get the necessary Session Object
+	Dim Sess0 As Object
+	Set Sess0 = System.ActiveSession
+	If (Sess0 is Nothing) Then
+		Msgbox "Could not create the Session object.  Stopping macro playback."
+		STOP
+	End If
+
+	' Bring BlueZone to the front
+	If Not Sess0.Visible Then Sess0.Visible = TRUE
+	Sess0.Screen.WaitHostQuiet(g_HostSettleTime)
+'***
+
+'*** Get the excel file with the list of policy numbers
+	Dim InputFile as String, ExcelValue as String
+	Dim xlApp As Object, xlSheet As Object, Row As Long
+	InputFile = InputBox("Please enter the Full Path of the Excel Spreadsheet")
+	
+	' Check that the path is valid
+	If InputFile = "" Then
+		STOP
+	End If
+'***
+
+'*** Get the text file to store the results of the macro
+	Dim ResultFile as String
+	ResultFile = InputBox("Please enter the Full Path of the Text File")
+	
+	' Check that the path is valid
+	If ResultFile = "" Then
+		STOP
+	End If
+'***
+
+'*** Variable used for moving through the output file
+	Dim FileNumber As Integer
+	FileNumber = FreeFile
+'***
+
+'*** Open the Excel file
+	Set xlApp = CreateObject("excel.application")
+	xlApp.Application.DisplayAlerts = False 	' Turn off Warning Messages
+      xlApp.Visible = False				' Make sure Excel does not have focus
+      xlApp.Workbooks.Open FileName:= InputFile
+      Set xlSheet = xlApp.activesheet
+'***
+
+'*** Pull the initial value from the spreadsheet
+	Row = 1
+	ExcelValue = Trim(xlApp.activesheet.Range("A"+Row).value)
+'***
+
+'*** Open the result file to write the output and set up headers
+	Open ResultFile For Output As FileNumber
+	Print #FileNumber, "Row", "Policy", " ", "Reason"
+'***
+
+'*** Initialize variables used to store the policy number
+	Dim ExcelLeft as String
+	Dim ExcelRight as String
+	Dim ExcelMod as String
+'***
+
+'*** Loop to check all policies in the Excel file
+	Do Until ExcelValue = ""
+		' Reset variables
+		flag = 0		' Variable used to note if the touch failed
+		message$ = ""	' Variable used to store the reason the touch failed
+		
+		' Check that the policy number is valid
+		If (Left(ExcelValue, 1) = "Q") Then		' Policy should start with a "Q"
+			
+			' Remove the possible hyphen and spaces from the policy number
+			If (Right(ExcelValue, 3, 1) = "/") Then
+				ExcelLeft = Left(ExcelValue, 3)
+				ExcelRight = Right(ExcelValue, 10, 7)
+				ExcelMod = Right(ExcelValue, 2)
+			Else
+				ExcelLeft = Left(ExcelValue, 3)
+				ExcelRight = Right(ExcelValue, 7)
+				ExcelMod = ""
+			End If
+
+			' Clear screen
+			Sess0.Screen.SendKeys("<Clear>")
+			Sess0.Screen.WaitHostQuiet(g_HostSettleTime)
+			
+			' Search for policy
+			Sess0.Screen.Sendkeys("PUBC")
+			Sess0.Screen.WaitHostQuiet(g_HostSettleTime)
+			If (ExcelMod = "") Then
+				Sess0.Screen.Sendkeys(" "+ExcelLeft+" "+ExcelRight)
+			Else
+				Sess0.Screen.Sendkeys(" "+ExcelLeft+" "+ExcelRight+" "+ExcelMod)
+			End If
+			Sess0.Screen.WaitHostQuiet(g_HostSettleTime)	
+			Sess0.Screen.SendKeys("<Enter>")
+			Sess0.Screen.WaitHostQuiet(g_HostSettleTime)
+
+			' Make sure policy is on file
+			If (Sess0.Screen.GetString(1, 71, 1) <> " ") Then 
+				message$ = "Failed: "+Sess0.Screen.GetString(1, 54, 18)
+				flag = 1
+			End If
+			Sess0.Screen.WaitHostQuiet(g_HostSettleTime)
+			
+			' Make sure there is not a pending touch on the policy
+			If (Sess0.Screen.GetString(5, 69, 1) <> " ") Then 
+				message$ = "Failed: "+Trim(Sess0.Screen.GetString(5, 69, 10))
+				flag = 1
+			End If
+			Sess0.Screen.WaitHostQuiet(g_HostSettleTime)
+
+			' As long as the policy passed the two previous tests, touch the policy
+			If (flag <> 1) Then
+				Sess0.Screen.MoveTo 5,03
+				Sess0.Screen.Sendkeys("<Tab><Tab><Tab><Tab><Tab><Tab><Tab>m")
+				Sess0.Screen.Select 7, 06, 7, 13
+				Sess0.Screen.Copy	
+				Sess0.Screen.MoveTo 5,52
+				Sess0.Screen.Paste
+				Sess0.Screen.Sendkeys("ref")
+				Sess0.Screen.Sendkeys("<Pf10>")
+				Sess0.Screen.WaitHostQuiet(g_HostSettleTime)
+				Sess0.Screen.Sendkeys("<Pf2>")	
+				Sess0.Screen.WaitHostQuiet(g_HostSettleTime)
+				Sess0.Screen.Sendkeys("<Pf11>")	
+				Sess0.Screen.WaitHostQuiet(g_HostSettleTime)
+				Sess0.Screen.Sendkeys("<Pf2>")	
+				Sess0.Screen.WaitHostQuiet(g_HostSettleTime)
+				Sess0.Screen.Sendkeys("<Tab>")
+			End If
+		Else
+			message$ = "Invalid policy number"
+			flag = 1
+		End If
+
+		' Write the output message to the result file if necessary
+		If flag = 1 Then
+			Print #FileNumber, Row, ExcelValue, " ", message$
+		End If
+		
+		' Increment the Row number in the Excel file
+		Row = Row + 1
+
+		' Read the next policy number
+		ExcelValue = Trim(xlApp.activesheet.Range("A"+Row).value)
+
+	Loop
+'***
+
+'*** Display confirmation message
+	MsgBox "End of policy list"
+
+'*** Close the input and output files
+	Close #FileNumber
+	xlApp.Quit
+	System.TimeoutValue = OldSystemTimeout
+
+End Sub
+
